@@ -30,3 +30,13 @@ yarn-error.log*
 *.njsproj
 *.sln
 *.sw?
+
+
+# WhatsApp
+auth_info_baileys
+
+# IBM
+ibm-token
+
+# MongoDB
+mongodb

@@ -1,195 +1,156 @@
-export function formatIbmResponse(raw) {
-  let text = raw;
-  let formatted = "";
+/* ==============================================================
+ *  ibmFormatters.js  – Limpieza y formateo de pasos Watsonx
+ * ============================================================ */
 
-  // Intenta detectar y desescapar JSON doblemente escapado
-  function tryParseDeepJson(str) {
-    let val = str;
-    let lastVal;
-    let count = 0;
-    // Intenta parsear recursivamente hasta que no cambie
-    while (typeof val === "string" && count < 5) {
-      try {
-        lastVal = val;
-        val = JSON.parse(val);
-        count++;
-      } catch (e) {
-        break;
-      }
-    }
-    return typeof val === "object" ? val : null;
-  }
+import crypto from "crypto";
 
-  // Busca todos los posibles bloques JSON (escapados o no)
-  const regex = /("{.*?}")|({.*?})/gs;
-  let match;
-  while ((match = regex.exec(text)) !== null) {
-    let jsonStr = match[0];
-    let jsonObj = tryParseDeepJson(jsonStr);
-    if (jsonObj) {
-      // Recorta campos largos
-      if (
-        jsonObj.content &&
-        typeof jsonObj.content === "string" &&
-        jsonObj.content.length > 500
-      ) {
-        jsonObj.content = jsonObj.content.slice(0, 500) + "...";
-      }
-      formatted += "```json\n" + JSON.stringify(jsonObj, null, 2) + "\n```\n";
-      text = text.replace(match[0], "").trim();
+/* ---------- configuración ----------------------------------- */
+const MAX_TOOL_FIELD_CHARS = 400; // por campo dentro del JSON del tool
+const MAX_TOOL_RAW_WORDS = 60; // si el tool devuelve texto plano
+const MAX_DEEP = 5; // profundidad de des-escape JSON
+
+/* ---------- utilidades -------------------------------------- */
+const hash = (s) => crypto.createHash("sha1").update(s).digest("hex");
+
+function tryParseDeepJson(str) {
+  let v = str,
+    i = 0;
+  while (typeof v === "string" && i++ < MAX_DEEP) {
+    try {
+      v = JSON.parse(v);
+    } catch {
+      break;
     }
   }
-
-  // Limpia saltos de línea y espacios extra
-  text = text.replace(/\n{2,}/g, "\n").replace(/^\s+|\s+$/g, "");
-
-  // Si no hay nada de texto, pero sí JSON, solo muestra el JSON
-  if (!text && formatted) return formatted.trim();
-  // Si hay ambos, muestra JSON y texto limpio
-  if (formatted) return (formatted + "\n" + text).trim();
-  // Si solo hay texto, muestra el texto limpio
-  return text || "[sin respuesta]";
+  return typeof v === "object" ? v : null;
 }
 
+/* Recorta strings muy largos dentro de un objeto JSON */
+function truncateJsonStrings(obj) {
+  if (Array.isArray(obj)) {
+    return obj.map(truncateJsonStrings);
+  }
+  if (obj && typeof obj === "object") {
+    const out = {};
+    for (const [k, v] of Object.entries(obj)) {
+      out[k] =
+        typeof v === "string" && v.length > MAX_TOOL_FIELD_CHARS
+          ? v.slice(0, MAX_TOOL_FIELD_CHARS) + "…"
+          : truncateJsonStrings(v);
+    }
+    return out;
+  }
+  return obj;
+}
+
+function truncateRawText(text) {
+  const words = text.trim().split(/\s+/);
+  return words.length > MAX_TOOL_RAW_WORDS
+    ? words.slice(0, MAX_TOOL_RAW_WORDS).join(" ") + "…"
+    : text;
+}
+
+function normalize(s) {
+  return typeof s === "string"
+    ? s
+        .replace(/^"|"$/g, "")
+        .replace(/\\n/g, "\n")
+        .replace(/\\"/g, '"')
+        .replace(/\s+/g, "")
+        .trim()
+    : null;
+}
+
+function looksLikeJsonDecorator(txt = "") {
+  return /^`*json`*$/i.test(txt.replace(/[\u202F\u00A0\s]+/g, ""));
+}
+
+/* ---------- formatIbmSteps ---------------------------------- */
 export function formatIbmSteps(steps) {
-  // Filtra steps duplicados manteniendo el orden
-  const uniqueSteps = [];
+  /* deduplicar */
+  const uniq = [];
   const seen = new Set();
-  for (const step of steps) {
-    const key = typeof step === "string" ? step.trim() : JSON.stringify(step);
-    if (!seen.has(key)) {
-      uniqueSteps.push(step);
-      seen.add(key);
+  for (const s of steps) {
+    const k = typeof s === "string" ? s.trim() : JSON.stringify(s);
+    if (!seen.has(k)) {
+      uniq.push(s);
+      seen.add(k);
     }
   }
-  // Separar y formatear cada step
-  let formatted = [];
-  let lastToolResultNormalized = null;
-  // Utilidad para normalizar strings (quita comillas, espacios y escapes)
-  function normalizeStr(str) {
-    if (typeof str !== "string") return null; // Solo normaliza strings
-    return str
-      .replace(/^"|"$/g, "")
-      .replace(/\\n/g, "\n")
-      .replace(/\\"/g, '"')
-      .replace(/\s+/g, "")
-      .trim();
-  }
-  for (let step of uniqueSteps) {
-    let currentStepNormalized = normalizeStr(step);
-    // Si el step actual es idéntico al último resultado de tool (normalizado), lo omitimos
-    if (
-      lastToolResultNormalized &&
-      currentStepNormalized === lastToolResultNormalized
-    ) {
-      continue; // Omite este step duplicado
-    }
-    // Si el step contiene JSON seguido de texto, sepáralos
-    const jsonTextMatch = step.match(/^(["']?{.*}["']?)([\s\S]*)$/);
-    if (jsonTextMatch) {
-      let jsonBlock = jsonTextMatch[1];
-      let explanation = jsonTextMatch[2] ? jsonTextMatch[2].trim() : "";
-      // Intenta parsear el bloque JSON (quitando comillas si es necesario)
-      let jsonStr = jsonBlock.replace(/^"|"$/g, "");
-      try {
-        const obj = JSON.parse(jsonStr);
-        formatted.push("```json\n" + JSON.stringify(obj, null, 2) + "\n```");
-        lastToolResultNormalized = normalizeStr(jsonStr);
-      } catch (e) {
-        formatted.push(jsonBlock);
-        lastToolResultNormalized = normalizeStr(jsonStr);
-      }
-      // Si hay explicación después del JSON, la agrego como texto limpio
-      if (explanation) {
-        let cleanText = explanation.replace(/\n{2,}/g, "\n").trim();
-        let cleanTextNorm = normalizeStr(cleanText);
-        // Asegurar que la explicación no empiece con el resultado del tool
-        if (
-          lastToolResultNormalized &&
-          typeof lastToolResultNormalized === "string" &&
-          cleanTextNorm.startsWith(lastToolResultNormalized)
-        ) {
-          cleanText = cleanText
-            .slice(normalizeStr(lastToolResult).length)
-            .trim();
-        }
-        if (cleanText) {
-          formatted.push(cleanText);
-        }
-      }
-      continue;
-    }
-    // Si es JSON puro
-    if (
-      typeof step === "string" &&
-      step.trim().startsWith("{") &&
-      step.trim().endsWith("}")
-    ) {
-      try {
-        const obj = JSON.parse(step);
-        formatted.push("```json\n" + JSON.stringify(obj, null, 2) + "\n```");
-        lastToolResultNormalized = normalizeStr(step);
-        continue;
-      } catch (e) {}
-    }
-    // Si es Tool o Resultado, resalta el título
+
+  const out = [];
+  const emitted = new Set();
+  let lastTool = null;
+
+  for (let i = 0; i < uniq.length; i++) {
+    let step = uniq[i];
+
+    /* Tool */
     if (step.startsWith("Tool:")) {
-      formatted.push("🛠️ " + step);
+      out.push("🛠️ " + step);
+      lastTool = step.match(/^Tool:\s+([^\s]+)$/)?.[1] || null;
       continue;
     }
-    if (step.startsWith("Resultado de")) {
-      // Si contiene JSON, formatea el JSON
-      const resMatch = step.match(/^(Resultado de [^:]+:\n)([\s\S]*)$/);
-      if (resMatch) {
-        formatted.push("✅ " + resMatch[1]);
-        let resultContent = resMatch[2];
-        // Intenta parsear JSON si parece serlo
-        if (
-          resultContent.trim().startsWith("{") &&
-          resultContent.trim().endsWith("}")
-        ) {
-          try {
-            const obj = JSON.parse(resultContent);
-            formatted.push(
-              "```json\n" + JSON.stringify(obj, null, 2) + "\n```"
-            );
-            lastToolResultNormalized = normalizeStr(resultContent);
-          } catch (e) {
-            formatted.push(resultContent);
-            lastToolResultNormalized = normalizeStr(resultContent);
-          }
-        } else {
-          // Si es texto largo, recorta y normaliza
-          if (resultContent.length > 500) {
-            resultContent = resultContent.slice(0, 500) + "...";
-          }
-          formatted.push(resultContent);
-          lastToolResultNormalized = normalizeStr(resultContent);
-        }
-        continue;
+
+    /* Resultado sin cuerpo → fusionar con siguiente */
+    if (step.startsWith("Resultado de") && !step.includes(":\n")) {
+      step = step + "\n" + (uniq[i + 1] ?? "");
+      i++;
+    }
+
+    /* JSON presente */
+    const jMatch = step.match(/(["']?{[\s\S]*}["']?)/);
+    if (jMatch) {
+      let raw = jMatch[1].replace(/^"|"$/g, "");
+      let obj = tryParseDeepJson(raw);
+
+      let pretty;
+      if (obj) {
+        // recortamos campos largos
+        obj = truncateJsonStrings(obj);
+        pretty = "```json\n" + JSON.stringify(obj, null, 2) + "\n```";
+      } else {
+        // JSON mal formado → texto plano
+        raw = truncateRawText(raw);
+        pretty = raw;
       }
-      // Si es solo el título del resultado
-      formatted.push("✅ " + step);
-      // No hay contenido de resultado para normalizar aquí
-      lastToolResultNormalized = null; // Reset si no hay contenido
+
+      const h = hash(normalize(pretty));
+      if (emitted.has(h)) continue;
+      emitted.add(h);
+
+      let before = step.slice(0, jMatch.index).trim();
+      const after = step.slice(jMatch.index + jMatch[1].length).trim();
+      if (looksLikeJsonDecorator(before)) before = "";
+
+      if (lastTool && !step.includes("✅ Resultado de")) {
+        out.push(`✅ Resultado de ${lastTool}:`);
+      }
+      if (before) out.push(before);
+      out.push(pretty);
+      if (after) out.push(after); // explicación completa, sin recorte
       continue;
     }
-    // Si es texto, limpia saltos de línea excesivos
-    let cleanText = step.replace(/\n{2,}/g, "\n").trim();
-    if (cleanText) {
-      formatted.push(cleanText);
+
+    /* Texto plano (explicación, no se recorta) */
+    const clean = step.replace(/\n{2,}/g, "\n").trim();
+    if (clean) {
+      const h = hash(normalize(clean));
+      if (!emitted.has(h)) {
+        emitted.add(h);
+        out.push(clean);
+      }
     }
   }
-  // Opcional: reordenar para que el texto explicativo vaya al final
-  const textSteps = formatted.filter(
-    (s) =>
-      !s.startsWith("```json") && !s.startsWith("🛠️") && !s.startsWith("✅")
-  );
-  const jsonSteps = formatted.filter((s) => s.startsWith("```json"));
-  const toolSteps = formatted.filter((s) => s.startsWith("🛠️"));
-  const resultSteps = formatted.filter((s) => s.startsWith("✅"));
-  // Orden: tool, json, resultado, texto
-  return [...toolSteps, ...jsonSteps, ...resultSteps, ...textSteps].filter(
-    Boolean
-  );
+
+  /* orden final */
+  return [
+    ...out.filter((s) => s.startsWith("🛠️")),
+    ...out.filter((s) => s.startsWith("✅")),
+    ...out.filter((s) => s.startsWith("```json")),
+    ...out.filter(
+      (s) =>
+        !s.startsWith("🛠️") && !s.startsWith("✅") && !s.startsWith("```json")
+    ),
+  ];
 }
