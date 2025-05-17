@@ -34,6 +34,7 @@ yarn-error.log*
 
 # WhatsApp
 auth_info_baileys
+@auth_info_baileys
 
 # IBM
 ibm-token
