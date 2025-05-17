@@ -1,8 +1,8 @@
 // message-handler.js - Manejador de mensajes WhatsApp
 import { logger } from "./baileys.config.js";
 import { sendMessage } from "./connection.js";
-import { sendToIBM } from "../ibm/ibm.service.js";
-import { formatIbmResponse } from "../ibm/formatter/index.js";
+import { sendToIBM, parseIbmSteps } from "../ibm/ibm.service.js";
+import { formatIbmSteps } from "../ibm/formatter/index.js";
 
 // Configuración
 const CONFIG = {
@@ -120,12 +120,16 @@ const handleCommand = async (chatId, sender, text) => {
       }
       try {
         const ibmResult = await sendToIBM(prompt);
-        const respuesta = formatIbmResponse(ibmResult.content || "[no hay na]");
-        await sendMessage(chatId, respuesta);
+        // Obtengo los steps y los formateo
+        const steps = parseIbmSteps(ibmResult.content || "[no hay na]");
+        const mensajes = formatIbmSteps(steps);
+        for (const msg of mensajes) {
+          await sendMessage(chatId, msg);
+          await sleep(1000); // 1 segundo de delay entre mensajes
+        }
       } catch (err) {
         logger.error("Error al consultar IBM:", err);
         logger.info(`IBM_API_KEY: ${process.env.IBM_API_KEY}`);
-
         await sendMessage(
           chatId,
           "❌ Error al consultar IBM: " + (err.message || err)
@@ -154,6 +158,11 @@ async function showHelp(chatId) {
 `;
 
   await sendMessage(chatId, helpText);
+}
+
+// Utilidad para pausar entre mensajes
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export default {

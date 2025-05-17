@@ -195,3 +195,83 @@ export async function sendToIBM(prompt) {
     throw error;
   }
 }
+
+/**
+ * Parsea la respuesta cruda de IBM (SSE o JSON) y devuelve un array de steps/mensajes.
+ * @param {string|object} raw - Respuesta cruda de IBM
+ * @returns {Array} Array de steps/mensajes
+ */
+export function parseIbmSteps(raw) {
+  // Si es un objeto, intenta extraer el mensaje principal
+  if (typeof raw === "object") {
+    if (
+      raw.choices &&
+      raw.choices[0] &&
+      raw.choices[0].message &&
+      raw.choices[0].message.content
+    ) {
+      return [raw.choices[0].message.content];
+    }
+    return [JSON.stringify(raw, null, 2)];
+  }
+  // Si es string JSON escapado, desescapa recursivamente
+  let s = raw;
+  let count = 0;
+  while (
+    typeof s === "string" &&
+    s.trim().startsWith('"') &&
+    s.trim().endsWith('"') &&
+    count < 3
+  ) {
+    try {
+      s = JSON.parse(s);
+      count++;
+    } catch (e) {
+      break;
+    }
+  }
+  // Si es string y parece SSE
+  if (typeof s === "string" && s.includes("id:") && s.includes("event:")) {
+    const events = parseSSE(s);
+    // Agrupa todos los fragmentos de texto en uno solo
+    let textContent = "";
+    const steps = [];
+    for (const ev of events) {
+      if (
+        ev.data &&
+        ev.data.choices &&
+        ev.data.choices[0] &&
+        ev.data.choices[0].delta
+      ) {
+        const delta = ev.data.choices[0].delta;
+        if (delta.content) textContent += delta.content;
+        // Si es tool call, muestra el nombre y argumentos
+        if (delta.tool_calls) {
+          for (const tool of delta.tool_calls) {
+            if (tool.function) {
+              steps.push(
+                `Tool: ${tool.function.name}\nArgs: ` +
+                  JSON.stringify(
+                    tool.function.arguments
+                      ? JSON.parse(tool.function.arguments)
+                      : {},
+                    null,
+                    2
+                  )
+              );
+            }
+          }
+        }
+        // Si es resultado de tool
+        if (delta.name && delta.content) {
+          steps.push(`Resultado de ${delta.name}:\n` + delta.content);
+        }
+      }
+    }
+    // Si hay texto, lo agrego como primer mensaje
+    if (textContent.trim()) steps.unshift(textContent.trim());
+    return steps;
+  }
+  // Si no, devuelve el string limpio
+  return [typeof s === "string" ? s : raw];
+}
