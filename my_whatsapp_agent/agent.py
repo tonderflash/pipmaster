@@ -10,8 +10,17 @@ from contextlib import asynccontextmanager
 # Load environment variables
 load_dotenv()
 
-# Initialize the LiteLLM model
-lite_llm_model = LiteLlm(model="openai/gpt-4o-mini")
+# TODO: Refactor this file
+
+# Initialize the LiteLLM model with token limits
+lite_llm_model = LiteLlm(
+    model="openai/gpt-4o-mini",
+    max_tokens=1000,          # Límite máximo de tokens por respuesta
+    temperature=0.7,          # Controla la aleatoriedad (0.0 a 1.0)
+    top_p=0.9,               # Controla la diversidad
+    frequency_penalty=0.2,    # Reduce la repetición
+    presence_penalty=0.2      # Fomenta nuevos temas
+)
 
 # Create a global agent instance and exit stack
 _agent_instance = None
@@ -25,23 +34,56 @@ async def create_agent():
         return _agent_instance, _exit_stack
 
     try:
-        # Initialize MCP tools using StdioServerParameters
-        # Reemplaza '/path/to/your/folder' con una ruta ABSOLUTA en tu sistema
-        # si el servidor MCP lo requiere.
-        tools, exit_stack = await MCPToolset.from_server(
-            connection_params=StdioServerParameters(
+        # Initialize multiple MCP servers
+        servers = [
+            # Desktop command server
+            StdioServerParameters(
                 command='npx',
+                args=["-y", "@wonderwhy-er/desktop-commander"],
+            ),
+            # Brave search server con límites optimizados
+            StdioServerParameters(
+                command='docker',
                 args=[
-                    "-y",
-                    "@wonderwhy-er/desktop-commander",
+                    "run", "-i", "--rm",
+                    "-e", "BRAVE_API_KEY",
+                    "-e", "MAX_TOKENS=500",          # Límite de tokens por respuesta
+                    "-e", "MAX_RESULTS=3",            # Máximo de resultados por búsqueda
+                    "-e", "TIMEOUT_MS=5000",           # Tiempo máximo de espera
+                    "mcp/brave-search"
                 ],
+                env={
+                    "BRAVE_API_KEY": "BSAse-So6tIvlTxPZzxqZJNljq-ROjp",
+                    "MAX_TOKENS": "500",
+                    "MAX_RESULTS": "3",
+                    "TIMEOUT_MS": "5000"
+                }
             )
-        )
+        ]
 
-        # Crea el agente con el modelo LiteLLM y las herramientas MCP
+        # Initialize MCP tools with the first server
+        # Nota: MCPToolset.from_server solo acepta un servidor a la vez
+        # Si necesitas múltiples servidores, necesitarás inicializarlos por separado
+        tools, exit_stack = await MCPToolset.from_server(servers[0])
+
+        # System message with instructions for the agent (más conciso para ahorrar tokens)
+        system_message = """Eres un asistente útil con acceso a búsquedas web.
+
+HERRAMIENTAS:
+1. brave_web_search: Para búsquedas generales en la web.
+2. brave_local_search: Para encontrar negocios o lugares cercanos.
+
+INSTRUCCIONES:
+- Usa herramientas solo cuando sea necesario.
+- Para preguntas generales, usa tu conocimiento base.
+- Responde de manera concisa.
+- Si no hay resultados, infórmalo claramente."""
+
+        # Create the agent with the LiteLLM model and MCP tools
         _agent_instance = LlmAgent(
             model=lite_llm_model,
-            name='my_whatsapp_agent', # Puedes ajustar el nombre del agente
+            name='my_whatsapp_agent',
+            system_message=system_message,
             instruction=(
                 'Soy un agente útil que puede interactuar con tu sistema de archivos a través de herramientas MCP.\n'
                 'Por favor, especifica la acción que deseas realizar en tu sistema de archivos (por ejemplo, listar archivos, leer un archivo).'
