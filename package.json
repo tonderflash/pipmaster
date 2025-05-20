@@ -11,6 +11,7 @@
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.17",
     "axios": "^1.9.0",
+    "link-preview-js": "^3.0.15",
     "pino": "^9.6.0",
     "qrcode-terminal": "^0.12.0"
   },
