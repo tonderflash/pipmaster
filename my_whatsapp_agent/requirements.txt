@@ -2,3 +2,5 @@ google-adk
 litellm
 requests
 mcp
+
+python-dotenv
