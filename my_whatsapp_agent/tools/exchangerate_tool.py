@@ -1,4 +1,21 @@
 def exchangerate(amount: float = 1.0, direction: str = "usd_to_dop"):
+    """Convierte moneda entre dólares estadounidenses (USD) y pesos dominicanos (DOP).
+
+    Utiliza APIs en tiempo real para obtener las tasas de cambio más recientes.
+    Úsala cuando el usuario pregunte por conversión de moneda entre USD y DOP.
+
+    Args:
+        amount (float, optional): La cantidad de dinero a convertir. 
+                                  Debe ser un número. Por defecto es 1.0.
+        direction (str, optional): La dirección de la conversión. 
+                                   Debe ser "usd_to_dop" o "dop_to_usd". 
+                                   Por defecto es "usd_to_dop".
+
+    Returns:
+        str: Una cadena JSON con el resultado si la conversión es exitosa 
+             (ej: '{"dop": 58.5, "rate": 58.5}'), 
+             o un mensaje de error (ej: "Error: amount must be a number").
+    """
     import requests, json, enum, numbers
 
     SOURCES = [
